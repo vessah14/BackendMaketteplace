@@ -18,130 +18,146 @@ namespace Backend_Mboagreen.Controllers
     {
         private readonly AppDbContext _context;
         private readonly PasswordHasher<UserModel> _hasher;
-        private readonly string _key;
+        private readonly IConfiguration _config;
+        private readonly ILogger<ConnexionController> _logger;
 
-        public ConnexionController(IConfiguration config, AppDbContext context)
+        public ConnexionController(IConfiguration config, AppDbContext context, ILogger<ConnexionController> logger)
         {
             _context = context;
             _hasher = new PasswordHasher<UserModel>();
-
-            _key = config["Jwt:Key"] 
-                ?? throw new Exception("Jwt:Key manquant");
+            _config = config;
+            _logger = logger;
         }
 
         [HttpPost("login")]
-        public IActionResult Login(ConnexionModel login)
+        public async Task<IActionResult> Login([FromBody] ConnexionModel login)
         {
-            if (login == null)
-                return BadRequest("Données invalides");
+            if (login == null || !ModelState.IsValid)
+                return BadRequest(new { message = "Données invalides" });
 
-            var user = _context.Users.FirstOrDefault(u => u.Email == login.Email);
+            if (string.IsNullOrWhiteSpace(login.Email) || string.IsNullOrWhiteSpace(login.Password))
+                return BadRequest(new { message = "Email et mot de passe requis" });
 
-            if (user == null)
-                return BadRequest("Utilisateur introuvable");
-
-            var result = _hasher.VerifyHashedPassword(user, user.Password, login.Password);
-
-            if (result == PasswordVerificationResult.Failed)
-                return BadRequest("Mot de passe incorrect");
-
-            var key = Encoding.UTF8.GetBytes(_key);
-
-            var tokenDescriptor = new SecurityTokenDescriptor
+            try
             {
-                Subject = new ClaimsIdentity(new[]
+                var user = await _context.Users.AsNoTracking()
+                    .FirstOrDefaultAsync(u => u.Email == login.Email);
+
+                if (user == null)
                 {
-                    new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
-                    new Claim(ClaimTypes.Email, user.Email),
-                    new Claim(ClaimTypes.Role, user.UserType)
-                }),
+                    _logger.LogWarning($"Login attempt with non-existent email: {login.Email}");
+                    // Message générique pour ne pas révéler l'existence d'utilisateurs
+                    return BadRequest(new { message = "Identifiants incorrects" });
+                }
 
-                Expires = DateTime.UtcNow.AddDays(1),
+                var result = _hasher.VerifyHashedPassword(user, user.Password, login.Password);
 
-                SigningCredentials = new SigningCredentials(
-                    new SymmetricSecurityKey(key),
-                    SecurityAlgorithms.HmacSha256Signature
-                )
-            };
+                if (result == PasswordVerificationResult.Failed)
+                {
+                    _logger.LogWarning($"Failed login attempt for user: {login.Email}");
+                    return BadRequest(new { message = "Identifiants incorrects" });
+                }
 
-            var tokenHandler = new JwtSecurityTokenHandler();
-            var token = tokenHandler.CreateToken(tokenDescriptor);
+                var jwtKey = _config["Jwt:Key"];
+                if (string.IsNullOrEmpty(jwtKey))
+                    throw new Exception("JWT Key manquant");
 
-            return Ok(new
+                var key = Encoding.UTF8.GetBytes(jwtKey);
+                var expirationMinutes = int.Parse(_config["Jwt:ExpirationMinutes"] ?? "1440");
+
+                var tokenDescriptor = new SecurityTokenDescriptor
+                {
+                    Subject = new ClaimsIdentity(new[]
+                    {
+                        new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
+                        new Claim(ClaimTypes.Email, user.Email),
+                        new Claim(ClaimTypes.Role, user.UserType),
+                        new Claim("UserId", user.Id.ToString())
+                    }),
+                    Expires = DateTime.UtcNow.AddMinutes(expirationMinutes),
+                    Issuer = _config["Jwt:Issuer"] ?? "MboaGreen",
+                    Audience = _config["Jwt:Audience"] ?? "MboaGreenUsers",
+                    SigningCredentials = new SigningCredentials(
+                        new SymmetricSecurityKey(key),
+                        SecurityAlgorithms.HmacSha256Signature
+                    )
+                };
+
+                var tokenHandler = new JwtSecurityTokenHandler();
+                var token = tokenHandler.CreateToken(tokenDescriptor);
+                var tokenString = tokenHandler.WriteToken(token);
+
+                _logger.LogInformation($"Successful login for user: {login.Email}");
+
+                return Ok(new
+                {
+                    message = "Connexion réussie",
+                    token = tokenString,
+                    expiresIn = expirationMinutes * 60, // en secondes
+                    user = new
+                    {
+                        user.Id,
+                        user.Nom,
+                        user.Prenom,
+                        user.Email,
+                        user.UserType
+                    }
+                });
+            }
+            catch (Exception ex)
             {
-                message = "Connexion réussie",
-                token = tokenHandler.WriteToken(token),
-                user = new
+                _logger.LogError($"Error during login: {ex.Message}");
+                return StatusCode(500, new { message = "Erreur lors de la connexion" });
+            }
+        }
+
+        [Authorize]
+        [HttpGet("me")]
+        public async Task<IActionResult> GetMe()
+        {
+            try
+            {
+                var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+                if (string.IsNullOrEmpty(userIdClaim))
+                    return Unauthorized(new { message = "Token invalide" });
+
+                if (!int.TryParse(userIdClaim, out int userId))
+                    return Unauthorized(new { message = "Token invalide" });
+
+                var user = await _context.Users.AsNoTracking()
+                    .FirstOrDefaultAsync(u => u.Id == userId);
+
+                if (user == null)
+                    return NotFound(new { message = "Utilisateur introuvable" });
+
+                return Ok(new
                 {
                     user.Id,
                     user.Nom,
                     user.Prenom,
                     user.Email,
-                    user.UserType
-                }
-            });
+                    user.UserType,
+                    user.Telephone,
+                    user.Adresse,
+                    user.Ville,
+                    user.Quartier
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Error in GetMe: {ex.Message}");
+                return StatusCode(500, new { message = "Erreur lors de la récupération du profil" });
+            }
         }
+
         [Authorize]
-        [HttpGet("me")]
-        public IActionResult GetMe()
+        [HttpPost("logout")]
+        public IActionResult Logout()
         {
-            var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-
-            if (userId == null)
-                return Unauthorized(new { message = "Token invalide" });
-
-            var user = _context.Users.FirstOrDefault(u => u.Id == int.Parse(userId));
-
-            if (user == null)
-                return NotFound(new { message = "Utilisateur introuvable" });
-
-            return Ok(new
-            {
-                user.Id,
-                user.Nom,
-                user.Prenom,
-                user.Email,
-                user.UserType
-            });
-        }
-        [HttpPost("reset-password")]
-        public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordDto dto)
-        {
-            if (dto == null)
-                return BadRequest("Données invalides");
-
-            var resetRequest = await _context.PasswordResets
-                .FirstOrDefaultAsync(r => r.Token == dto.Token);
-
-            if (resetRequest == null)
-                return BadRequest("Token invalide");
-
-            // Vérification email + token ensemble (sécurité renforcée)
-            if (resetRequest.Email != dto.Email)
-                return BadRequest("Email ne correspond pas au token");
-
-            if (resetRequest.Expiration < DateTime.UtcNow)
-                return BadRequest("Token expiré");
-
-            var user = await _context.Users
-                .FirstOrDefaultAsync(u => u.Email == dto.Email);
-
-            if (user == null)
-                return BadRequest("Utilisateur introuvable");
-
-            // Hash du nouveau mot de passe
-            var hasher = new PasswordHasher<UserModel>();
-            user.Password = hasher.HashPassword(user, dto.NewPassword);
-
-            // Supprimer le token après utilisation
-            _context.PasswordResets.Remove(resetRequest);
-
-            await _context.SaveChangesAsync();
-
-            return Ok(new
-            {
-                message = "Mot de passe réinitialisé avec succès"
-            });
+            // Le logout côté client supprime le token
+            // Optionnel: implémenter un token blacklist si besoin
+            return Ok(new { message = "Déconnexion réussie" });
         }
     }
 }

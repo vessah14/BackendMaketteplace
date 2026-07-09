@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: backend-mboagreen
+    env: docker
+    plan: free
+    dockerfilePath: Dockerfile
+    envVars:
+      - key: ASPNETCORE_ENVIRONMENT
+        value: Production
+      - key: DOTNET_RUNNING_IN_CONTAINER
+        value: true
+    buildCommand: null
+    startCommand: null
