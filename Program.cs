@@ -1,19 +1,37 @@
+using Backend_Mboagreen.Configurations;
 using Backend_Mboagreen.Data;
 using Backend_Mboagreen.Services;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.FileProviders;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
+
+// Controllers
 builder.Services.AddControllers();
+
+
+// CamerPay
 builder.Services.AddHttpClient<CamerPayService>();
 
-// Ajouter le service email
+
+// Service Email
 builder.Services.AddScoped<IEmailService, EmailService>();
 
+
+// Service Cloudinary
+builder.Services.Configure<CloudinarySettings>(
+    builder.Configuration.GetSection("CloudinarySettings")
+);
+
+builder.Services.AddScoped<
+    ICloudinaryService,
+    CloudinaryService>();
+
+
+// Base de données
 builder.Services.AddDbContext<AppDbContext>(options =>
         options.UseMySql(
         builder.Configuration.GetConnectionString("DefaultConnection"),
@@ -21,6 +39,8 @@ builder.Services.AddDbContext<AppDbContext>(options =>
             builder.Configuration.GetConnectionString("DefaultConnection")
         )));
 
+
+// CORS
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowReactApp", policy =>
@@ -37,94 +57,125 @@ builder.Services.AddCors(options =>
     });
 });
 
-// JWT Authentication avec validation stricte
+
+// JWT
 var jwtKey = builder.Configuration["Jwt:Key"];
+
 if (string.IsNullOrEmpty(jwtKey) || jwtKey.Length < 32)
 {
-    throw new Exception("JWT Key manquant ou trop court (min 32 caractères)");
+    throw new Exception(
+        "JWT Key manquant ou trop court (minimum 32 caractères).");
 }
 
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options =>
-    {
-        options.TokenValidationParameters = new TokenValidationParameters
+
+builder.Services
+.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+.AddJwtBearer(options =>
+{
+
+    options.TokenValidationParameters =
+        new TokenValidationParameters
         {
             ValidateIssuer = true,
-            ValidIssuer = builder.Configuration["Jwt:Issuer"] ?? "MboaGreen",
+
+            ValidIssuer =
+            builder.Configuration["Jwt:Issuer"]
+            ?? "MboaGreen",
+
             ValidateAudience = true,
-            ValidAudience = builder.Configuration["Jwt:Audience"] ?? "MboaGreenUsers",
+
+            ValidAudience =
+            builder.Configuration["Jwt:Audience"]
+            ?? "MboaGreenUsers",
+
             ValidateLifetime = true,
+
             ValidateIssuerSigningKey = true,
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey)),
+
+            IssuerSigningKey =
+            new SymmetricSecurityKey(
+                Encoding.UTF8.GetBytes(jwtKey)
+            ),
+
             ClockSkew = TimeSpan.Zero
         };
 
-        options.Events = new JwtBearerEvents
+
+    options.Events = new JwtBearerEvents
+    {
+        OnAuthenticationFailed = context =>
         {
-            OnAuthenticationFailed = context =>
-            {
-                context.Response.StatusCode = 401;
-                context.Response.ContentType = "application/json";
-                return context.Response.WriteAsync(
-                    System.Text.Json.JsonSerializer.Serialize(new { message = "Token invalide ou expiré" }));
-            }
-        };
-    });
+            context.Response.StatusCode = 401;
+            context.Response.ContentType = "application/json";
+
+            return context.Response.WriteAsync(
+
+                System.Text.Json.JsonSerializer.Serialize(
+                    new
+                    {
+                        message =
+                        "Token invalide ou expiré"
+                    })
+
+                );
+        }
+    };
+
+});
+
 
 builder.Services.AddAuthorization();
 
-// Ajouter le logging
+
+// Logging
 builder.Services.AddLogging();
+
 
 var app = builder.Build();
 
-// CORS doit venir en premier (avant authentication et https redirect)
+
+// CORS
 app.UseCors("AllowReactApp");
 
-// HTTPS redirection seulement en production
+
+// HTTPS
 if (!app.Environment.IsDevelopment())
 {
     app.UseHttpsRedirection();
 }
 
+
 // Headers de sécurité
 app.Use(async (context, next) =>
 {
-    context.Response.Headers.Append("X-Content-Type-Options", "nosniff");
-    context.Response.Headers.Append("X-Frame-Options", "DENY");
-    context.Response.Headers.Append("X-XSS-Protection", "1; mode=block");
-    context.Response.Headers.Append("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+    context.Response.Headers.Append(
+        "X-Content-Type-Options",
+        "nosniff");
+
+    context.Response.Headers.Append(
+        "X-Frame-Options",
+        "DENY");
+
+    context.Response.Headers.Append(
+        "X-XSS-Protection",
+        "1; mode=block");
+
+    context.Response.Headers.Append(
+        "Strict-Transport-Security",
+        "max-age=31536000; includeSubDomains");
+
     await next();
 });
 
-var uploadsPath = Path.Combine(
-    Directory.GetCurrentDirectory(),
-    "wwwroot",
-    "uploads");
 
-if (!Directory.Exists(uploadsPath))
-{
-    Directory.CreateDirectory(uploadsPath);
-}
-
-app.UseStaticFiles();
-
-app.UseStaticFiles(new StaticFileOptions
-{
-    FileProvider = new PhysicalFileProvider(
-        Path.Combine(Directory.GetCurrentDirectory(), "wwwroot")),
-    RequestPath = ""
-});
-
-app.UseStaticFiles(new StaticFileOptions
-{
-    FileProvider = new PhysicalFileProvider(uploadsPath),
-    RequestPath = "/uploads"
-});
-
+// Authentification
 app.UseAuthentication();
+
 app.UseAuthorization();
 
+
+// Controllers
 app.MapControllers();
+
 
 app.Run();
