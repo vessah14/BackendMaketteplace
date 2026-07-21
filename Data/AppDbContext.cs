@@ -14,6 +14,7 @@ namespace Backend_Mboagreen.Data
         public DbSet<AnnonceModel> Annonce { get; set; }
         public DbSet<PasswordReset> PasswordResets { get; set; }
         public DbSet<Notification> Notifications { get; set; }
+        public DbSet<VisitModel> Visits { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {

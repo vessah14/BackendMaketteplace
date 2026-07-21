@@ -3,69 +3,97 @@ using Backend_Mboagreen.Data;
 using Backend_Mboagreen.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.FileProviders;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
+
 
 var builder = WebApplication.CreateBuilder(args);
 
 
-// Controllers
+
+// =======================
+// CONTROLLERS
+// =======================
+
 builder.Services.AddControllers();
 
 
-// CamerPay
+
+// =======================
+// SERVICES
+// =======================
+
 builder.Services.AddHttpClient<CamerPayService>();
 
-
-// Service Email
 builder.Services.AddScoped<IEmailService, EmailService>();
 
 
-// Service Cloudinary
 builder.Services.Configure<CloudinarySettings>(
     builder.Configuration.GetSection("CloudinarySettings")
 );
 
+
 builder.Services.AddScoped<
     ICloudinaryService,
-    CloudinaryService>();
+    CloudinaryService
+>();
 
 
-// Base de données
+
+
+// =======================
+// BASE DE DONNEES
+// =======================
+
 builder.Services.AddDbContext<AppDbContext>(options =>
-        options.UseMySql(
+    options.UseMySql(
         builder.Configuration.GetConnectionString("DefaultConnection"),
         ServerVersion.AutoDetect(
             builder.Configuration.GetConnectionString("DefaultConnection")
-        )));
+        )
+    )
+);
 
 
+
+
+// =======================
 // CORS
+// =======================
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowReactApp", policy =>
     {
         policy
-            .WithOrigins(
-                "http://localhost:5173",
-                "https://unable-aunt.surge.sh"
-            )
-            .AllowAnyHeader()
-            .AllowAnyMethod()
-            .AllowCredentials()
-            .WithExposedHeaders("Content-Disposition");
+        .WithOrigins(
+            "http://localhost:5173",
+            "http://localhost:5174"
+        )
+        .AllowAnyHeader()
+        .AllowAnyMethod()
+        .AllowCredentials();
     });
 });
 
 
+
+
+// =======================
 // JWT
+// =======================
+
 var jwtKey = builder.Configuration["Jwt:Key"];
+
 
 if (string.IsNullOrEmpty(jwtKey) || jwtKey.Length < 32)
 {
     throw new Exception(
-        "JWT Key manquant ou trop court (minimum 32 caractères).");
+        "JWT Key manquant ou trop court."
+    );
 }
+
 
 
 builder.Services
@@ -74,108 +102,182 @@ builder.Services
 {
 
     options.TokenValidationParameters =
-        new TokenValidationParameters
-        {
-            ValidateIssuer = true,
-
-            ValidIssuer =
-            builder.Configuration["Jwt:Issuer"]
-            ?? "MboaGreen",
-
-            ValidateAudience = true,
-
-            ValidAudience =
-            builder.Configuration["Jwt:Audience"]
-            ?? "MboaGreenUsers",
-
-            ValidateLifetime = true,
-
-            ValidateIssuerSigningKey = true,
-
-            IssuerSigningKey =
-            new SymmetricSecurityKey(
-                Encoding.UTF8.GetBytes(jwtKey)
-            ),
-
-            ClockSkew = TimeSpan.Zero
-        };
-
-
-    options.Events = new JwtBearerEvents
+    new TokenValidationParameters
     {
-        OnAuthenticationFailed = context =>
-        {
-            context.Response.StatusCode = 401;
-            context.Response.ContentType = "application/json";
 
-            return context.Response.WriteAsync(
+        ValidateIssuer = true,
 
-                System.Text.Json.JsonSerializer.Serialize(
-                    new
-                    {
-                        message =
-                        "Token invalide ou expiré"
-                    })
+        ValidIssuer =
+        builder.Configuration["Jwt:Issuer"],
 
-                );
-        }
+
+        ValidateAudience = true,
+
+        ValidAudience =
+        builder.Configuration["Jwt:Audience"],
+
+
+        ValidateLifetime = true,
+
+
+        ValidateIssuerSigningKey = true,
+
+
+        IssuerSigningKey =
+        new SymmetricSecurityKey(
+            Encoding.UTF8.GetBytes(jwtKey)
+        ),
+
+
+        ClockSkew = TimeSpan.Zero
     };
 
 });
 
 
+
 builder.Services.AddAuthorization();
 
-
-// Logging
 builder.Services.AddLogging();
 
+
+
+
+// =======================
+// BUILD
+// =======================
 
 var app = builder.Build();
 
 
+
+
+// =======================
 // CORS
+// =======================
+
 app.UseCors("AllowReactApp");
 
 
+
+
+// =======================
 // HTTPS
+// =======================
+
 if (!app.Environment.IsDevelopment())
 {
     app.UseHttpsRedirection();
 }
 
 
-// Headers de sécurité
+
+
+
+// =======================
+// HEADERS SECURITE
+// =======================
+
 app.Use(async (context, next) =>
 {
+
     context.Response.Headers.Append(
         "X-Content-Type-Options",
-        "nosniff");
+        "nosniff"
+    );
+
 
     context.Response.Headers.Append(
         "X-Frame-Options",
-        "DENY");
+        "DENY"
+    );
 
-    context.Response.Headers.Append(
-        "X-XSS-Protection",
-        "1; mode=block");
-
-    context.Response.Headers.Append(
-        "Strict-Transport-Security",
-        "max-age=31536000; includeSubDomains");
 
     await next();
+
 });
 
 
-// Authentification
+
+
+
+// =======================
+// DOSSIER UPLOADS
+// =======================
+
+
+var wwwrootPath = Path.Combine(
+    Directory.GetCurrentDirectory(),
+    "wwwroot"
+);
+
+
+var uploadsPath = Path.Combine(
+    wwwrootPath,
+    "uploads"
+);
+
+
+
+if (!Directory.Exists(wwwrootPath))
+{
+    Directory.CreateDirectory(wwwrootPath);
+}
+
+
+
+if (!Directory.Exists(uploadsPath))
+{
+    Directory.CreateDirectory(uploadsPath);
+}
+
+
+
+
+// =======================
+// FICHIERS STATIQUES
+// =======================
+
+app.UseStaticFiles(
+    new StaticFileOptions
+    {
+
+        FileProvider =
+        new PhysicalFileProvider(
+            wwwrootPath
+        ),
+
+        RequestPath = ""
+
+    }
+);
+
+
+
+
+
+// =======================
+// AUTH
+// =======================
+
 app.UseAuthentication();
 
 app.UseAuthorization();
 
 
-// Controllers
+
+
+// =======================
+// ROUTES API
+// =======================
+
 app.MapControllers();
 
+
+
+
+// =======================
+// START
+// =======================
 
 app.Run();

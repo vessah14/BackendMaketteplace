@@ -27,6 +27,7 @@ namespace Backend_Mboagreen.Models
 
         public bool AcceptTerms { get; set; }
         public bool Newsletter { get; set; }
+        public DateTime CreatedAt { get; set; }
 
         // IMPORTANT pour ton radio bouton
         public string UserType { get; set; } // vendeur / acheteur
