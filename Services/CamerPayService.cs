@@ -9,23 +9,41 @@ namespace Backend_Mboagreen.Services
     {
         private readonly HttpClient _httpClient;
         private readonly IConfiguration _config;
+        private readonly PaymentSimulator _paymentSimulator;
 
-        public CamerPayService(HttpClient httpClient, IConfiguration config)
+        public bool IsSimulatorEnabled =>
+            _config.GetValue<bool>("CamerPay:UseSimulator");
+
+        public CamerPayService(
+            HttpClient httpClient,
+            IConfiguration config,
+            PaymentSimulator paymentSimulator)
         {
             _httpClient = httpClient;
             _config = config;
+            _paymentSimulator = paymentSimulator;
 
-            var token = _config["CamerPay:Token"];
-            var apiUrl = _config["CamerPay:ApiUrl"];
+            if (!IsSimulatorEnabled)
+            {
+                var token = _config["CamerPay:Token"];
+                var apiUrl = _config["CamerPay:ApiUrl"];
 
-            _httpClient.BaseAddress = new Uri(apiUrl);
-            _httpClient.DefaultRequestHeaders.Authorization =
-                new AuthenticationHeaderValue("Bearer", token);
+                _httpClient.BaseAddress = new Uri(apiUrl);
+                _httpClient.DefaultRequestHeaders.Authorization =
+                    new AuthenticationHeaderValue("Bearer", token);
+            }
         }
 
-        public async Task<JsonElement> InitierPaiement(PaiementRequest request)
+        public async Task<JsonElement> InitierPaiement(
+            PaiementRequest request,
+            string simulatorBaseUrl)
         {
-           var payload = new
+            if (IsSimulatorEnabled)
+            {
+                return _paymentSimulator.CreatePayment(request, simulatorBaseUrl);
+            }
+
+            var payload = new
             {
                 amount = request.Amount,
                 currency = request.Currency,
@@ -52,10 +70,21 @@ namespace Backend_Mboagreen.Services
 
         public async Task<JsonElement> VerifierPaiement(string uuid)
         {
+            if (IsSimulatorEnabled)
+            {
+                return _paymentSimulator.GetStatus(uuid);
+            }
+
             var response = await _httpClient.GetAsync($"/api/payment/{uuid}/status");
             var json = await response.Content.ReadAsStringAsync();
 
             return JsonSerializer.Deserialize<JsonElement>(json);
         }
+
+        public bool FinaliserPaiementSimule(string uuid, string status) =>
+            IsSimulatorEnabled && _paymentSimulator.SetStatus(uuid, status);
+
+        public bool PaiementSimuleExiste(string uuid) =>
+            IsSimulatorEnabled && _paymentSimulator.Exists(uuid);
     }
 }

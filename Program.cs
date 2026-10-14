@@ -25,6 +25,7 @@ builder.Services.AddControllers();
 // =======================
 
 builder.Services.AddHttpClient<CamerPayService>();
+builder.Services.AddSingleton<PaymentSimulator>();
 
 builder.Services.AddScoped<IEmailService, EmailService>();
 
@@ -46,13 +47,16 @@ builder.Services.AddScoped<
 // BASE DE DONNEES
 // =======================
 
+var postgresConnection = builder.Configuration.GetConnectionString("DefaultConnection");
+if (string.IsNullOrWhiteSpace(postgresConnection))
+{
+    throw new InvalidOperationException(
+        "Configurez ConnectionStrings__DefaultConnection avec la chaîne PostgreSQL."
+    );
+}
+
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseMySql(
-        builder.Configuration.GetConnectionString("DefaultConnection"),
-        ServerVersion.AutoDetect(
-            builder.Configuration.GetConnectionString("DefaultConnection")
-        )
-    )
+    options.UseNpgsql(postgresConnection)
 );
 
 
@@ -69,7 +73,8 @@ builder.Services.AddCors(options =>
         policy
         .WithOrigins(
             "http://localhost:5173",
-            "http://localhost:5174"
+            "http://localhost:5174",
+            "http://localhost:5175"
         )
         .AllowAnyHeader()
         .AllowAnyMethod()
